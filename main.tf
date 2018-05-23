@@ -71,7 +71,7 @@ resource "google_compute_instance_group_manager" "default" {
   zone = "${var.zone}"
 
   update_strategy = "${var.update_strategy}"
-
+  wait_for_instances = true
   target_pools = ["${var.target_pools}"]
 
   // There is no way to unset target_size when autoscaling is true so for now, jsut use the min_replicas value.
@@ -86,6 +86,13 @@ resource "google_compute_instance_group_manager" "default" {
   auto_healing_policies = {
     health_check      = "${var.http_health_check ? element(concat(google_compute_health_check.mig-health-check.*.self_link, list("")), 0) : ""}"
     initial_delay_sec = "${var.hc_initial_delay}"
+  }
+  rolling_update_policy {
+    type = "PROACTIVE"
+    minimal_action = "REPLACE"
+    max_surge_fixed = "${var.autoscaling ? var.min_replicas : var.size}"
+    max_unavailable_fixed = 0
+    min_ready_sec = 50
   }
 
   provisioner "local-exec" {
