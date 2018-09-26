@@ -54,7 +54,7 @@ variable name {
 }
 
 variable size {
-  description = "Target size of the manged instance group."
+  description = "Target size of the managed instance group."
   default     = 1
 }
 
@@ -66,7 +66,10 @@ variable startup_script {
 variable access_config {
   description = "The access config block for the instances. Set to [] to remove external IP."
   type        = "list"
-  default     = [{}]
+
+  default = [
+    {},
+  ]
 }
 
 variable metadata {
@@ -92,12 +95,24 @@ variable machine_type {
 
 variable compute_image {
   description = "Image used for compute VMs."
-  default     = "debian-cloud/debian-8"
+  default     = "projects/debian-cloud/global/images/family/debian-9"
+}
+
+variable wait_for_instances {
+  description = "Wait for all instances to be created/updated before returning"
+  default     = false
 }
 
 variable update_strategy {
   description = "The strategy to apply when the instance template changes. See https://www.terraform.io/docs/providers/google/r/compute_instance_group_manager.html#update_strategy"
   default = "ROLLING_UPDATE"
+  //default     = "NONE"
+}
+
+variable rolling_update_policy {
+  description = "The rolling update policy when update_strategy is ROLLING_UPDATE"
+  type        = "list"
+  default     = []
 }
 
 variable service_port {
@@ -112,6 +127,12 @@ variable target_tags {
   description = "Tag added to instances for firewall and networking."
   type        = "list"
   default     = ["allow-service"]
+}
+
+variable instance_labels {
+  description = "Labels added to instances."
+  type        = "map"
+  default     = {}
 }
 
 variable target_pools {
@@ -155,6 +176,48 @@ variable service_account_scopes {
 variable zonal {
   description = "Create a single-zone managed instance group. If false, a regional managed instance group is created."
   default     = true
+}
+
+variable distribution_policy_zones {
+  description = "The distribution policy for this managed instance group when zonal=false. Default is all zones in given region."
+  type        = "list"
+  default     = []
+}
+
+variable ssh_source_ranges {
+  description = "Network ranges to allow SSH from"
+  type        = "list"
+  default     = ["0.0.0.0/0"]
+}
+
+variable disk_auto_delete {
+  description = "Whether or not the disk should be auto-deleted."
+  default     = true
+}
+
+variable disk_type {
+  description = "The GCE disk type. Can be either pd-ssd, local-ssd, or pd-standard."
+  default     = "pd-ssd"
+}
+
+variable disk_size_gb {
+  description = "The size of the image in gigabytes. If not specified, it will inherit the size of its base image."
+  default     = 0
+}
+
+variable mode {
+  description = "The mode in which to attach this disk, either READ_WRITE or READ_ONLY."
+  default     = "READ_WRITE"
+}
+
+variable "preemptible" {
+  description = "Use preemptible instances - lower price but short-lived instances. See https://cloud.google.com/compute/docs/instances/preemptible for more details"
+  default     = "false"
+}
+
+variable "automatic_restart" {
+  description = "Automatically restart the instance if terminated by GCP - Set to false if using preemptible instances"
+  default     = "true"
 }
 
 /* Autoscaling */
@@ -205,6 +268,7 @@ variable http_health_check {
 variable hc_initial_delay {
   description = "Health check, intial delay in seconds."
   default     = 300
+  //default     = 30
 }
 
 variable hc_interval {
@@ -235,4 +299,9 @@ variable hc_port {
 variable hc_path {
   description = "Health check, the http path to check."
   default     = "/"
+}
+
+variable ssh_fw_rule {
+  description = "Whether or not the SSH Firewall Rule should be created"
+  default     = true
 }
