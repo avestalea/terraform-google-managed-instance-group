@@ -25,6 +25,8 @@ resource "google_compute_instance_template" "default" {
 
   tags = ["${concat(list("allow-ssh"), var.target_tags)}"]
 
+  labels = "${var.instance_labels}"
+
   network_interface {
     network            = "${var.subnetwork == "" ? var.network : ""}"
     subnetwork         = "${var.subnetwork}"
@@ -36,11 +38,13 @@ resource "google_compute_instance_template" "default" {
   can_ip_forward = "${var.can_ip_forward}"
 
   disk {
-    auto_delete  = true
+    auto_delete  = "${var.disk_auto_delete}"
     boot         = true
     source_image = "${var.compute_image}"
     type         = "PERSISTENT"
-    disk_type    = "pd-ssd"
+    disk_type    = "${var.disk_type}"
+    disk_size_gb = "${var.disk_size_gb}"
+    mode         = "${var.mode}"
   }
 
   service_account {
@@ -53,17 +57,23 @@ resource "google_compute_instance_template" "default" {
     var.metadata
   )}"
 
+  scheduling {
+    preemptible       = "${var.preemptible}"
+    automatic_restart = "${var.automatic_restart}"
+  }
+
   lifecycle {
     create_before_destroy = true
   }
 }
 
 resource "google_compute_instance_group_manager" "default" {
-  count       = "${var.module_enabled && var.zonal ? 1 : 0}"
-  project     = "${var.project}"
-  name        = "${var.name}"
-  description = "compute VM Instance Group"
-
+  count              = "${var.module_enabled && var.zonal ? 1 : 0}"
+  project            = "${var.project}"
+  name               = "${var.name}"
+  description        = "compute VM Instance Group"
+  // wait_for_instances = "${var.wait_for_instances}"
+  wait_for_instances = true
   base_instance_name = "${var.name}"
 
   instance_template = "${google_compute_instance_template.default.self_link}"
@@ -71,7 +81,9 @@ resource "google_compute_instance_group_manager" "default" {
   zone = "${var.zone}"
 
   update_strategy = "${var.update_strategy}"
-  wait_for_instances = true
+
+  rolling_update_policy = ["${var.rolling_update_policy}"]
+
   target_pools = ["${var.target_pools}"]
 
   // There is no way to unset target_size when autoscaling is true so for now, jsut use the min_replicas value.
@@ -124,17 +136,38 @@ resource "google_compute_autoscaler" "default" {
   }
 }
 
+data "google_compute_zones" "available" {
+  project = "${var.project}"
+  region  = "${var.region}"
+}
+
+locals {
+  distribution_zones = {
+    default = ["${data.google_compute_zones.available.names}"]
+    user    = ["${var.distribution_policy_zones}"]
+  }
+
+  dependency_id = "${element(concat(null_resource.region_dummy_dependency.*.id, list("disabled")), 0)}"
+}
+
 resource "google_compute_region_instance_group_manager" "default" {
-  count       = "${var.module_enabled && ! var.zonal ? 1 : 0}"
-  project     = "${var.project}"
-  name        = "${var.name}"
-  description = "compute VM Instance Group"
+  count              = "${var.module_enabled && ! var.zonal ? 1 : 0}"
+  project            = "${var.project}"
+  name               = "${var.name}"
+  description        = "compute VM Instance Group"
+  wait_for_instances = "${var.wait_for_instances}"
 
   base_instance_name = "${var.name}"
 
   instance_template = "${google_compute_instance_template.default.self_link}"
 
   region = "${var.region}"
+
+  update_strategy = "${var.update_strategy}"
+
+  rolling_update_policy = ["${var.rolling_update_policy}"]
+
+  distribution_policy_zones = ["${local.distribution_zones["${length(var.distribution_policy_zones) == 0 ? "default" : "user"}"]}"]
 
   target_pools = ["${var.target_pools}"]
 
@@ -158,9 +191,13 @@ resource "google_compute_region_instance_group_manager" "default" {
   }
 
   provisioner "local-exec" {
-    when        = "create"
-    command     = "${var.local_cmd_create}"
-    interpreter = ["sh", "-c"]
+    when    = "create"
+    command = "${var.local_cmd_create}"
+  }
+
+  // Initial instance verification can take 10-15m when a health check is present.
+  timeouts = {
+    create = "${var.http_health_check ? "15m" : "5m"}"
   }
 }
 
@@ -184,15 +221,23 @@ resource "google_compute_region_autoscaler" "default" {
 resource "null_resource" "dummy_dependency" {
   count      = "${var.module_enabled && var.zonal ? 1 : 0}"
   depends_on = ["google_compute_instance_group_manager.default"]
+
+  triggers = {
+    instance_template = "${element(google_compute_instance_template.default.*.self_link, 0)}"
+  }
 }
 
 resource "null_resource" "region_dummy_dependency" {
   count      = "${var.module_enabled && ! var.zonal ? 1 : 0}"
   depends_on = ["google_compute_region_instance_group_manager.default"]
+
+  triggers = {
+    instance_template = "${element(google_compute_instance_template.default.*.self_link, 0)}"
+  }
 }
 
 resource "google_compute_firewall" "default-ssh" {
-  count   = "${var.module_enabled ? 1 : 0}"
+  count   = "${var.module_enabled && var.ssh_fw_rule ? 1 : 0}"
   project = "${var.subnetwork_project == "" ? var.project : var.subnetwork_project}"
   name    = "${var.name}-vm-ssh"
   network = "${var.network}"
@@ -202,7 +247,7 @@ resource "google_compute_firewall" "default-ssh" {
     ports    = ["22"]
   }
 
-  source_ranges = ["0.0.0.0/0"]
+  source_tags   = ["bastion"]
   target_tags   = ["allow-ssh"]
 }
 
@@ -239,7 +284,10 @@ resource "google_compute_firewall" "mig-health-check" {
 
 data "google_compute_instance_group" "zonal" {
   count   = "${var.zonal ? 1 : 0}"
-  name    = "${google_compute_instance_group_manager.default.name}"
+  //name    = "${google_compute_instance_group_manager.default.name}"
   zone    = "${var.zone}"
   project = "${var.project}"
+
+  // Use the dependency id which is recreated whenever the instance template changes to signal when to re-read the data source.
+  name = "${element(split("|", "${local.dependency_id}|${element(concat(google_compute_instance_group_manager.default.*.name, list("unused")), 0)}"), 1)}"
 }
